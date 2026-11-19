@@ -9,6 +9,8 @@
 
 Fast, cheap, typed judgments from TypeSafe's Jev model, as MCP tools.
 
+> **This fork** also runs on Google's native [Gemini Decisions API](https://aistudio.google.com/docs/decisions-api) (`gemini-decision-1`): set `JEV_PROVIDER=google` and `GEMINI_API_KEY`. The same twelve tools then run on Gemini Decision 1, and a thirteenth tool, `decisions_ask`, takes images, audio, video and PDFs. See [Google Gemini Decisions](#google-gemini-decisions-native) and [docs/google-decisions.md](docs/google-decisions.md). With any other provider, nothing changes.
+
 Give your agent twelve judgment tools:
 
 - `jev_verify` checks claims against evidence.
@@ -762,7 +764,12 @@ The built-ins stay limited to major providers. The no-code extension path here i
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | none | Cloudflare Workers AI; used when no other provider key is present. `JEV_CLOUDFLARE_API_TOKEN` is honored first for separate credentials. |
 | `AI_GATEWAY_API_KEY` | none | Vercel AI Gateway; used when no other provider key is present. |
 | `JEV_VERCEL_ZERO_DATA_RETENTION` | unset | `1` or `true` asks the Vercel AI Gateway to route only through its zero-data-retention providers; use with `JEV_PROVIDER=vercel`. See [Vercel](#vercel). |
-| `JEV_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, `vercel`, or `compatible` instead of auto-detection. |
+| `JEV_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, `vercel`, `compatible`, or `google` instead of auto-detection. `google` is never auto-selected. |
+| `GEMINI_API_KEY` | none | Google AI Studio key; required with `JEV_PROVIDER=google`. |
+| `JEV_GOOGLE_MODEL` | `gemini-decision-1` | Google model id. A `JEV_MCP_MODEL` that starts with `gemini-` is honoured too. |
+| `JEV_GOOGLE_BASE_URL` | `https://generativelanguage.googleapis.com` | Override the Google API root (`/v1beta/decisions` is appended). |
+| `JEV_MEDIA_ROOT` | server working directory | `decisions_ask` reads local files only from under this directory (symlinks that escape it are refused). |
+| `JEV_MEDIA_MAX_BYTES` | `20971520` | Largest local file `decisions_ask` will inline; use the Files API and a `uri` above that. |
 | `JEV_MCP_MODEL` | `jev-latest` | Pin a Jev version, e.g. `jev-1.12`, or `typesafe/jev-1.13` on OpenRouter. |
 | `TYPESAFE_BASE_URL` | none | Custom direct endpoint (origin only; the SDK appends its route). |
 | `JEV_API_BASE_URL` + `JEV_API_KEY` | none | Jev-compatible System One endpoint and Bearer token; use with `JEV_PROVIDER=compatible`. `JEV_API_BASE_URL` is the full POST URL including the `/v1/systemone` path. |
@@ -795,6 +802,38 @@ With `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set (and no other provid
 If you already have an OpenRouter key, that is all you need: with no `TYPESAFE_API_KEY` present, every call goes through OpenRouter's Decisions API at identical pricing. The endpoint is alpha and adds a hop. The default `jev-latest` uses OpenRouter's moving `~typesafe/jev-latest` alias; pin `typesafe/jev-1.13` for reproducible routing. Results report the snapshot OpenRouter returns. Direct TypeSafe remains the recommended default when you have both keys.
 
 When a Jev request exceeds its token limit, OpenRouter errors report `OpenRouter decisions API 400 (max_tokens_exceeded)`. Other upstream text and unknown error types stay hidden because they can echo credentials or request content.
+
+### Google Gemini Decisions (native)
+
+Google's [Decisions API](https://aistudio.google.com/docs/decisions-api) answers the same kind of typed questions (`noul`, `choice`, `score`) with Gemini Decision 1: calibrated probabilities, zero output tokens, $0.10 per 1M input tokens. This server speaks it directly, with no proxy:
+
+```bash
+JEV_PROVIDER=google GEMINI_API_KEY=... npx jev-mcp
+```
+
+All twelve Jev tools run unchanged. The provider rewrites Jev's request into Google's shape (`state` becomes `input`; object-shaped question instructions become text; `noul` criteria become `true_description` / `false_description`; empty `choice` descriptions become `""`). Calls go to `POST /v1beta/decisions` with an `x-goog-api-key` header, and keep this server's deadline, retry and body-size limits.
+
+**`decisions_ask`** is registered only with `JEV_PROVIDER=google`. It takes an ordered `input` of `text`, `image`, `audio`, `video` and `document` (PDF) blocks, each from a local `path`, an https `uri` or base64 `data`, plus up to 200 questions in Google's own types, and returns each answer with an `auto` or `review` decision at `auto_accept` (default 0.85):
+
+```json
+{
+  "input": [{ "type": "image", "path": "page-1.png", "resolution": "low" }],
+  "questions": {
+    "is_symbols": { "type": "noul", "instructions": "Does question 1 ask the learner to write a number in symbols?" },
+    "marks": { "type": "choice", "instructions": "How many marks is question 1 worth?", "criteria": { "m1": "", "m2": "", "m5": "", "other": "" } }
+  }
+}
+```
+
+Things that differ from Jev, from Google's docs and from testing (one Grade 4 maths paper, small samples; see [docs/google-decisions.md](docs/google-decisions.md)):
+
+- `choice` option keys are sorted alphabetically by Google, so option order cannot matter. Order sensitivity comes from the input text.
+- `noul` is clamped to 0.01 to 0.99. Google recommends an `other` catch-all, not `none_of_the_above`.
+- Jev's default thresholds (0.85, 0.7 and 0.35 for `exists`) were set for Jev. Calibrate them per model before trusting an automatic decision.
+- Tools that ask the model to do arithmetic (`jev_verify` and `jev_decide` over computed answers) are weak. Compute in code and pass the result.
+- Spoken multi-digit numbers were not reliable (5806, 5860 and 5086 were confused); single-word spoken answers were. Transcribe first when exact digits matter.
+- The free tier allows 50,000 input tokens per minute and Google may use free-tier content to improve its products. Do not send personal data on it.
+- No context caching or Batch API; repeated input is billed in full.
 
 ### Jev-compatible endpoints
 
