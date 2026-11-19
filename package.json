@@ -1,6 +1,6 @@
 {
   "name": "@jkudish/jev-mcp",
-  "version": "0.14.8",
+  "version": "0.15.0",
   "description": "MCP server exposing TypeSafe Jev as purpose-built judgment tools: verify claims, screen for injection, find, rerank, classify, decide, compare passages, extract fields, review patches, and gate completion claims, each with typed probabilities.",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "build": "tsc",
     "prepare": "npm run build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/unit.test.mjs test/mock.test.mjs test/provider.test.mjs test/typesafe-abort-regression.test.mjs test/http.test.mjs test/exa-example.test.mjs test/server.test.mjs test/hook-gate.test.mjs",
+    "test": "node --test test/unit.test.mjs test/mock.test.mjs test/provider.test.mjs test/typesafe-abort-regression.test.mjs test/http.test.mjs test/exa-example.test.mjs test/server.test.mjs test/hook-gate.test.mjs test/google.test.mjs",
     "test:e2e": "node --test test/e2e.test.mjs"
   },
   "keywords": [

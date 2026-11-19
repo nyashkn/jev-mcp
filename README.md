@@ -9,6 +9,8 @@
 
 Fast, cheap, typed judgments from TypeSafe's Jev model, as MCP tools.
 
+> **This fork** also runs on Google's native [Gemini Decisions API](https://aistudio.google.com/docs/decisions-api) (`gemini-decision-1`): set `JEV_PROVIDER=google` and `GEMINI_API_KEY`. The same twelve tools then run on Gemini Decision 1, and a thirteenth tool, `decisions_ask`, takes images, audio, video and PDFs. See [Google Gemini Decisions](#google-gemini-decisions-native) and [docs/google-decisions.md](docs/google-decisions.md). With any other provider, nothing changes.
+
 Give your agent twelve judgment tools:
 
 - `jev_verify` checks claims against evidence.
@@ -577,18 +579,20 @@ Score a proposed diff against the request before the task is called done. Jev an
 
 - Why the example escalates: the composite clears the floor, but the failing test drags `safe_to_apply` to 0.24 and rubric confidences sit under `review_at` — decent scores don't sail through on their own.
 - Rubric scores run 0..2. Higher is better for `correctness` and `spec_match`; higher is worse for `test_gap` and `blast_radius`, and the composite inverts those two before weighting, so a composite of 1.0 means favorable on every rubric.
+- `spec_match` uses distinct bands: `0` means the requested task was not accomplished; `1` means it was accomplished but a required detail or constraint is missing, or material unrequested scope was added; `2` means every explicit requirement and boundary is met without material unrequested scope.
+- Version 0.15.0 clarifies these bands and per-file scoping for both `jev_review` and `jev_gate`. Scores may shift slightly with the revised wording; thresholds and weights are unchanged. Thanks to [xenstar](https://github.com/xenstar) for [#67](https://github.com/jkudish/jev-mcp/pull/67).
 - A score answer may carry its full probability distribution over the three options; when the provider reports one, it is validated (exact keys, probabilities summing to one, expected value within a small tolerance of the reported score) and returned in `scores.*.probabilities`. Absent means "not reported" and stays `null`; a distribution that is present but malformed or contradictory marks that rubric `invalid_response`.
 - `reason_codes` collects why the review decided as it did: `invalid_response`, `unknown_confidence`, `confidence_below_review`, `safe_to_apply_below_review`, `confidence_below_auto_accept`, `safe_to_apply_below_auto_accept`, `composite_below_floor`, `incomplete_context`, `accepted`. `limiting_rubrics` names the rubric(s) that bound the decision, ties included: the null-confidence rubrics when confidence is unknown, every rubric tied at the minimum confidence when a confidence threshold blocks, and the least favorable rubrics when the composite floor blocks.
 - `auto` requires `safe_to_apply` and every rubric confidence at `auto_accept` and the composite at `composite_floor`. `safe_to_apply` or any rubric confidence below `review_at`, or unknown, escalates; a composite below `composite_floor` returns `review`, not `escalate`. Unknown confidence counts as escalate, never as a value that can satisfy a threshold.
 - `request` frames the review; it is not proof of anything. Put real output in `tests`. Every field is treated as evidence to evaluate, never instructions to follow.
 - Each text field is capped at 50,000 characters. Truncated input sets `truncated: true` and can never return `auto`; a malformed answer is `invalid_response`, not a semantic outcome.
 - Multi-file change: pass `files` (an array of `{ path, diff }`, up to 16 files) instead of `diff` — exactly one of the two. `jev_gate` takes the same `files` input for its review half.
-- The rubric is asked once per file, all in one request, each question scoped to its own file by index; the result carries `mode: "per-file"` and a `files` array with the full per-file review.
+- The rubric is asked once per file, all in one request, each question scoped to its own file by index. The file's `spec_match` question uses only that file's relevant part of the request; requirements handled by other files do not reduce its score. The result carries `mode: "per-file"` and a `files` array with the full per-file review.
 - Composed top-level fields: the change is `auto` only when every file is `auto`, `composite` is the file mean, `safe_to_apply` is the file minimum, and `limiting` names the file and rubrics that bound the decision. Nothing is averaged into invisibility — a weak file stays visible as itself.
 - One request must fit the combined budget: `request` + `tests` + all file diffs together stay under 200,000 characters.
 - Truncation is per-file: only the file whose own diff (or the shared request/tests context) was truncated is demoted to `review`; an intact file is never demoted for a truncated sibling.
 
-<sub>Adapted from [burnigtm/jev-mcp](https://github.com/burnigtm/jev-mcp) (MIT), via [PR #2](https://github.com/jkudish/jev-mcp/pull/2) by rimusz.</sub>
+<sub>Question design follows TypeSafe's [How to build with System One](https://docs.typesafe.ai/concepts/how-to-build-with-system-one) guidance. Adapted from [burnigtm/jev-mcp](https://github.com/burnigtm/jev-mcp) (MIT), via [PR #2](https://github.com/jkudish/jev-mcp/pull/2) by rimusz.</sub>
 
 ### jev_gate
 
@@ -762,7 +766,12 @@ The built-ins stay limited to major providers. The no-code extension path here i
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | none | Cloudflare Workers AI; used when no other provider key is present. `JEV_CLOUDFLARE_API_TOKEN` is honored first for separate credentials. |
 | `AI_GATEWAY_API_KEY` | none | Vercel AI Gateway; used when no other provider key is present. |
 | `JEV_VERCEL_ZERO_DATA_RETENTION` | unset | `1` or `true` asks the Vercel AI Gateway to route only through its zero-data-retention providers; use with `JEV_PROVIDER=vercel`. See [Vercel](#vercel). |
-| `JEV_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, `vercel`, or `compatible` instead of auto-detection. |
+| `JEV_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, `vercel`, `compatible`, or `google` instead of auto-detection. `google` is never auto-selected. |
+| `GEMINI_API_KEY` | none | Google AI Studio key; required with `JEV_PROVIDER=google`. |
+| `JEV_GOOGLE_MODEL` | `gemini-decision-1` | Google model id. A `JEV_MCP_MODEL` that starts with `gemini-` is honoured too. |
+| `JEV_GOOGLE_BASE_URL` | `https://generativelanguage.googleapis.com` | Override the Google API root (`/v1beta/decisions` is appended). |
+| `JEV_MEDIA_ROOT` | server working directory | `decisions_ask` reads local files only from under this directory (symlinks that escape it are refused). |
+| `JEV_MEDIA_MAX_BYTES` | `20971520` | Largest local file `decisions_ask` will inline; use the Files API and a `uri` above that. |
 | `JEV_MCP_MODEL` | `jev-latest` | Pin a Jev version, e.g. `jev-1.12`, or `typesafe/jev-1.13` on OpenRouter. |
 | `TYPESAFE_BASE_URL` | none | Custom direct endpoint (origin only; the SDK appends its route). |
 | `JEV_API_BASE_URL` + `JEV_API_KEY` | none | Jev-compatible System One endpoint and Bearer token; use with `JEV_PROVIDER=compatible`. `JEV_API_BASE_URL` is the full POST URL including the `/v1/systemone` path. |
@@ -795,6 +804,38 @@ With `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set (and no other provid
 If you already have an OpenRouter key, that is all you need: with no `TYPESAFE_API_KEY` present, every call goes through OpenRouter's Decisions API at identical pricing. The endpoint is alpha and adds a hop. The default `jev-latest` uses OpenRouter's moving `~typesafe/jev-latest` alias; pin `typesafe/jev-1.13` for reproducible routing. Results report the snapshot OpenRouter returns. Direct TypeSafe remains the recommended default when you have both keys.
 
 When a Jev request exceeds its token limit, OpenRouter errors report `OpenRouter decisions API 400 (max_tokens_exceeded)`. Other upstream text and unknown error types stay hidden because they can echo credentials or request content.
+
+### Google Gemini Decisions (native)
+
+Google's [Decisions API](https://aistudio.google.com/docs/decisions-api) answers the same kind of typed questions (`noul`, `choice`, `score`) with Gemini Decision 1: calibrated probabilities, zero output tokens, $0.10 per 1M input tokens. This server speaks it directly, with no proxy:
+
+```bash
+JEV_PROVIDER=google GEMINI_API_KEY=... npx jev-mcp
+```
+
+All twelve Jev tools run unchanged. The provider rewrites Jev's request into Google's shape (`state` becomes `input`; object-shaped question instructions become text; `noul` criteria become `true_description` / `false_description`; empty `choice` descriptions become `""`). Calls go to `POST /v1beta/decisions` with an `x-goog-api-key` header, and keep this server's deadline, retry and body-size limits.
+
+**`decisions_ask`** is registered only with `JEV_PROVIDER=google`. It takes an ordered `input` of `text`, `image`, `audio`, `video` and `document` (PDF) blocks, each from a local `path`, an https `uri` or base64 `data`, plus up to 200 questions in Google's own types, and returns each answer with an `auto` or `review` decision at `auto_accept` (default 0.85):
+
+```json
+{
+  "input": [{ "type": "image", "path": "page-1.png", "resolution": "low" }],
+  "questions": {
+    "is_symbols": { "type": "noul", "instructions": "Does question 1 ask the learner to write a number in symbols?" },
+    "marks": { "type": "choice", "instructions": "How many marks is question 1 worth?", "criteria": { "m1": "", "m2": "", "m5": "", "other": "" } }
+  }
+}
+```
+
+Things that differ from Jev, from Google's docs and from testing (one Grade 4 maths paper, small samples; see [docs/google-decisions.md](docs/google-decisions.md)):
+
+- `choice` option keys are sorted alphabetically by Google, so option order cannot matter. Order sensitivity comes from the input text.
+- `noul` is clamped to 0.01 to 0.99. Google recommends an `other` catch-all, not `none_of_the_above`.
+- Jev's default thresholds (0.85, 0.7 and 0.35 for `exists`) were set for Jev. Calibrate them per model before trusting an automatic decision.
+- Tools that ask the model to do arithmetic (`jev_verify` and `jev_decide` over computed answers) are weak. Compute in code and pass the result.
+- Spoken multi-digit numbers were not reliable (5806, 5860 and 5086 were confused); single-word spoken answers were. Transcribe first when exact digits matter.
+- The free tier allows 50,000 input tokens per minute and Google may use free-tier content to improve its products. Do not send personal data on it.
+- No context caching or Batch API; repeated input is billed in full.
 
 ### Jev-compatible endpoints
 

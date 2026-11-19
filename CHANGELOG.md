@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (fork)
+
+- Added a native `google` provider for Google's Gemini Decisions API (`JEV_PROVIDER=google`, `GEMINI_API_KEY`, optional `JEV_GOOGLE_MODEL` and `JEV_GOOGLE_BASE_URL`). All twelve tools run on it; the request mapping is `toGoogleDecisionsBody` in `src/provider.ts`.
+- Added `decisions_ask`, a multimodal passthrough (text, image, audio, video, PDF) that is registered only for the google provider, with a local-file root (`JEV_MEDIA_ROOT`) and size cap (`JEV_MEDIA_MAX_BYTES`).
+- Added `docs/google-decisions.md` and `test/google.test.mjs`. Behaviour with every other provider is unchanged.
+
+## 0.15.0
+
+- Clarified `spec_match` scoring in `jev_review` and `jev_gate`: 0 means the task was not accomplished, 1 means it was accomplished but misses a required detail or adds material unrequested scope, and 2 means every explicit requirement and boundary is met without material unrequested scope. Per-file scoring considers only each file's responsibilities. Scores may shift slightly; thresholds and weights are unchanged. Thanks to [xenstar](https://github.com/xenstar) for [#67](https://github.com/jkudish/jev-mcp/pull/67).
+
 ## 0.14.8
 
 - Updated locked Hono and Node HTTP adapter dependencies to address upstream security advisories. These lockfile updates do not enforce a minimum in consumers’ existing lockfiles.

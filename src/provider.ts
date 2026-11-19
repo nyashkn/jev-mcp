@@ -6,7 +6,7 @@
 import { ask, openrouterJevModel, resolveTransport, type JevTransport, type JevTransportReply } from "@jkudish/jev-agent-tools";
 import { isRecord } from "./lib.js";
 
-export type JevProvider = "typesafe" | "openrouter" | "cloudflare" | "vercel" | "compatible";
+export type JevProvider = "typesafe" | "openrouter" | "cloudflare" | "vercel" | "compatible" | "google";
 
 export interface AskResult {
   answers: Record<string, any>;
@@ -240,6 +240,11 @@ async function fetchWithResilience(url: string, init: RequestInit, deadline: Dea
 function resolve(env: NodeJS.ProcessEnv): JevProvider {
   const explicit = (env.JEV_PROVIDER ?? "auto").toLowerCase();
   const hasCompatible = Boolean(env.JEV_API_KEY && env.JEV_API_BASE_URL);
+  // Native Google Decisions API (gemini-decision-1). Never auto-selected: a GEMINI_API_KEY in the environment must not change a Jev setup.
+  if (explicit === "google") {
+    if (!env.GEMINI_API_KEY) throw new Error("JEV_PROVIDER=google but GEMINI_API_KEY is not set.");
+    return "google";
+  }
   if (explicit === "compatible") {
     const missing = ["JEV_API_KEY", "JEV_API_BASE_URL"].filter((name) => !env[name]);
     if (missing.length > 0) {
@@ -256,6 +261,38 @@ function resolve(env: NodeJS.ProcessEnv): JevProvider {
       !((env.JEV_CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_API_TOKEN) && env.CLOUDFLARE_ACCOUNT_ID) &&
       !env.AI_GATEWAY_API_KEY) return "compatible";
   return resolveTransport({ ...env, JEV_PROVIDER: explicit || "auto" }).name as JevProvider;
+}
+
+
+/** Model id for the Google provider: JEV_GOOGLE_MODEL, else an explicit gemini-* JEV_MCP_MODEL, else gemini-decision-1. */
+export function googleModel(model: string): string {
+  return process.env.JEV_GOOGLE_MODEL || (model.startsWith("gemini-") ? model : "gemini-decision-1");
+}
+
+/**
+ * Map Jev's {state, questions} onto Google's {model, input, questions}.
+ * - input: a string is sent as is; an array of typed content blocks (text, image, audio, video, document) is
+ *   passed through for multimodal calls; any other object is serialized to JSON text, as the docs advise.
+ * - instructions must be text, so Jev's object-shaped instructions are serialized.
+ * - noul criteria are {true_description, false_description}; Jev's are {true, false}.
+ * - choice options with a null description become "" (Google's spelling of "self-explanatory").
+ * choice and score need no other change: Google sorts option keys itself, and score criteria stay an array.
+ */
+export function toGoogleDecisionsBody(state: unknown, questions: Record<string, unknown>, model: string) {
+  const isBlocks = Array.isArray(state) && state.length > 0 && state.every((b) => isRecord(b) && typeof b.type === "string");
+  const input = typeof state === "string" || isBlocks ? state : JSON.stringify(state);
+  const mapped = Object.fromEntries(Object.entries(questions).map(([k, raw]) => {
+    let q: any = raw;
+    if (isRecord(q) && typeof q.instructions !== "string") q = { ...q, instructions: JSON.stringify(q.instructions) };
+    if (q?.type === "noul" && isRecord(q.criteria) && ("true" in q.criteria || "false" in q.criteria)) {
+      q = { ...q, criteria: { true_description: q.criteria.true, false_description: q.criteria.false } };
+    }
+    if (q?.type === "choice" && isRecord(q.criteria)) {
+      q = { ...q, criteria: Object.fromEntries(Object.entries(q.criteria).map(([id, d]) => [id, d ?? ""])) };
+    }
+    return [k, q];
+  }));
+  return { model, input, questions: mapped };
 }
 
 export async function askJev(
@@ -310,6 +347,31 @@ export async function askJev(
       return { answers, usage: reply.usage, provider, model: reply.model };
     }
     return { answers: result.answer, usage: result.usage, provider, model: result.model };
+  }
+
+  if (provider === "google") {
+    const slug = googleModel(model);
+    const key = process.env.GEMINI_API_KEY as string;
+    const deadline = deadlineSignal(signal, REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetchWithResilience(apiUrl(process.env.JEV_GOOGLE_BASE_URL || "https://generativelanguage.googleapis.com", "/v1beta/decisions"), {
+        method: "POST",
+        headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
+        body: JSON.stringify(toGoogleDecisionsBody(state, questions, slug)),
+      }, deadline);
+      const bodyText = await readBodyBounded(response, deadline);
+      if (!response.ok) throw new Error(redactSecret(`Google decisions API ${response.status} ${bodyText.slice(0, 400)}`, key));
+      let body: any;
+      try { body = JSON.parse(bodyText); } catch { throw new Error(`Google decisions API ${response.status} returned an unparseable response`); }
+      return {
+        answers: body.answers ?? {},
+        usage: { input_tokens: body.usage?.total_input_tokens ?? 0, output_tokens: body.usage?.total_output_tokens ?? 0 },
+        provider,
+        model: slug,
+      };
+    } finally {
+      deadline.dispose();
+    }
   }
 
   if (provider === "openrouter") {
